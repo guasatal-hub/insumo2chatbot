@@ -1,290 +1,242 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-  Animated,
+  ScrollView,
   Image,
+  StyleSheet,
 } from "react-native";
-import * as Clipboard from "expo-clipboard";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Audio } from "expo-av";
+import { model } from "./gemini.ts";
 
-// --- IMAGEN DEL BOT (REEMPLAZA CON TU LOGO) ---
+// 📌 IMPORTA EL AVATAR DEL BOT (ASEGÚRATE QUE EL ARCHIVO EXISTE)
 const botAvatar = require("../assets/images/bot.png");
 
-// --- IA ---
-const API_KEY = "AIzaSyB10b-FTo4dzyd_3Za7cougzi2FucREpBo";
-const genAI = new GoogleGenerativeAI(API_KEY);
+export default function ChatBot() {
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<
+    { role: string; text: string; time: string }[]
+  >([]);
+  const [sound, setSound] = useState<any>();
+  const scrollRef = useRef<any>();
 
-// 👉 Animación Fade In
-const FadeInView = ({ children, style }) => {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  // 🔊 SONIDO DE ENVÍO
+  async function playSendSound() {
+    const { sound } = await Audio.Sound.createAsync(
+      require("../assets/images/send.mp3.mp3")
+    );
+    setSound(sound);
+    await sound.playAsync();
+  }
 
   useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 400,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+    return sound
+      ? () => {
+          sound.unloadAsync();
+        }
+      : undefined;
+  }, [sound]);
 
-  return (
-    <Animated.View style={{ ...style, opacity: fadeAnim }}>
-      {children}
-    </Animated.View>
-  );
-};
-
-// --- CHATBOT ---
-export default function ChatBot() {
-  const [messages, setMessages] = useState([
-    { id: "1", text: "¡Hola! ¿En qué puedo ayudarte hoy?", sender: "bot" },
-  ]);
-
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const flatListRef = useRef(null);
-
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+  // 🕒 HORA ESTILO WHATSAPP
+  const getHour = () => {
+    const now = new Date();
+    return now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const copyMessage = (text) => {
-    Clipboard.setStringAsync(text);
-  };
+  // 📤 ENVIAR MENSAJE
+  const handleSend = async () => {
+    if (!input.trim()) return;
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
+    playSendSound();
 
-    const userMsg = {
-      id: Math.random().toString(),
+    const userMessage = {
+      role: "user",
       text: input,
-      sender: "user",
+      time: getHour(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
-    scrollToBottom();
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
-    setLoading(true);
 
-    const typingId = Math.random().toString();
-
+    // 🟦 Mostrar burbuja "escribiendo..."
     setMessages((prev) => [
       ...prev,
-      { id: typingId, text: "•••", sender: "bot", isTyping: true },
+      { role: "typing", text: "Escribiendo...", time: getHour() },
     ]);
 
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const result = await model.generateContent(userMsg.text);
-      const response = await result.response.text();
+      const result = await model.generateContent(input);
+      const aiText = result.response.text();
 
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === typingId
-            ? { ...msg, text: response, isTyping: false }
-            : msg
-        )
-      );
-    } catch (err) {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === typingId
-            ? {
-                ...msg,
-                text: "⚠️ Error, intenta de nuevo.",
-                isTyping: false,
-              }
-            : msg
-        )
-      );
+      // ❌ Quitar "escribiendo..."
+      setMessages((prev) => prev.filter((m) => m.role !== "typing"));
+
+      // ✔ Mensaje del bot
+      setMessages((prev) => [
+        ...prev,
+        { role: "bot", text: aiText, time: getHour() },
+      ]);
+    } catch (error) {
+      console.log("Error:", error);
     }
-
-    scrollToBottom();
-    setLoading(false);
   };
 
-  const renderMessage = ({ item }) => (
-    <FadeInView>
-      <View
-        style={[
-          styles.row,
-          item.sender === "user" ? styles.rightRow : styles.leftRow,
-        ]}
+  return (
+    <View style={styles.container}>
+      <ScrollView
+        ref={scrollRef}
+        onContentSizeChange={() =>
+          scrollRef.current?.scrollToEnd({ animated: true })
+        }
+        style={{ flex: 1 }}
       >
-        {item.sender === "bot" && (
-          <Image source={botAvatar} style={styles.avatar} />
-        )}
-
-        <View>
+        {messages.map((msg, index) => (
           <View
+            key={index}
             style={[
-              styles.bubble,
-              item.sender === "user"
-                ? styles.userBubble
-                : styles.botBubble,
+              styles.messageContainer,
+              msg.role === "user"
+                ? styles.userMessage
+                : msg.role === "typing"
+                ? styles.typingMessage
+                : styles.botMessage,
             ]}
           >
-            <Text style={styles.msgText}>{item.text}</Text>
+            {/* Avatar del bot */}
+            {msg.role !== "user" && msg.role !== "typing" && (
+              <Image source={botAvatar} style={styles.avatar} />
+            )}
+
+            {/* Burbuja */}
+            <View
+              style={[
+                styles.bubble,
+                msg.role === "user"
+                  ? styles.bubbleUser
+                  : msg.role === "typing"
+                  ? styles.bubbleTyping
+                  : styles.bubbleBot,
+              ]}
+            >
+              <Text
+                style={{
+                  color: msg.role === "user" ? "white" : "#222",
+                  fontSize: 16,
+                }}
+              >
+                {msg.text}
+              </Text>
+
+              {/* Hora del mensaje */}
+              <Text
+                style={{
+                  fontSize: 10,
+                  color: msg.role === "user" ? "#dff" : "#666",
+                  marginTop: 4,
+                  alignSelf: "flex-end",
+                }}
+              >
+                {msg.time}
+              </Text>
+            </View>
           </View>
+        ))}
+      </ScrollView>
 
-          {/* ICONOS BAJO EL MENSAJE */}
-          <View style={styles.msgActions}>
-            <TouchableOpacity>
-              <Text style={styles.icon}>👍</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={() => copyMessage(item.text)}>
-              <Text style={styles.icon}>📋</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity>
-              <Text style={styles.icon}>⋯</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </FadeInView>
-  );
-
-  return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      {/* Header estilo moderno */}
-      <View style={styles.header}>
-        <Image source={botAvatar} style={styles.headerAvatar} />
-        <View>
-          <Text style={styles.headerTitle}>Text Writer</Text>
-          <Text style={styles.headerSubtitle}>Healthy eating tips</Text>
-        </View>
-      </View>
-
-      {/* CHAT */}
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ padding: 10 }}
-        onContentSizeChange={scrollToBottom}
-      />
-
-      {/* INPUT */}
+      {/* ➕ Input */}
       <View style={styles.inputContainer}>
         <TextInput
-          style={styles.textInput}
-          placeholder="Send message..."
-          placeholderTextColor="#AAA"
           value={input}
-          multiline
           onChangeText={setInput}
+          placeholder="Escribe un mensaje..."
+          style={styles.input}
         />
-        <TouchableOpacity
-          style={[styles.sendBtn, loading && { opacity: 0.5 }]}
-          onPress={sendMessage}
-          disabled={loading}
-        >
-          <Text style={styles.sendIcon}>➤</Text>
+
+        <TouchableOpacity onPress={handleSend} style={styles.sendBtn}>
+          <Text style={{ color: "white", fontWeight: "bold" }}>Enviar</Text>
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
-// --- ESTILOS ---
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0F0F1E" },
+  container: {
+    flex: 1,
+    backgroundColor: "#E7EBEE",
+    paddingTop: 40,
+  },
 
-  // HEADER
-  header: {
+  messageContainer: {
     flexDirection: "row",
-    alignItems: "center",
-    padding: 15,
-    backgroundColor: "#111122",
-    borderBottomWidth: 1,
-    borderBottomColor: "#222233",
+    paddingHorizontal: 10,
+    marginVertical: 5,
+    alignItems: "flex-end",
   },
-  headerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
+
+  userMessage: {
+    justifyContent: "flex-end",
   },
-  headerTitle: { color: "#fff", fontSize: 20, fontWeight: "bold" },
-  headerSubtitle: { color: "#888", fontSize: 13 },
 
-  // MENSAJES
-  row: { flexDirection: "row", marginVertical: 5, alignItems: "flex-end" },
-  leftRow: { justifyContent: "flex-start" },
-  rightRow: { justifyContent: "flex-end" },
+  botMessage: {
+    justifyContent: "flex-start",
+  },
 
-  avatar: { width: 38, height: 38, borderRadius: 20, marginRight: 6 },
+  typingMessage: {
+    justifyContent: "flex-start",
+  },
+
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 50,
+    marginRight: 6,
+  },
 
   bubble: {
-    padding: 12,
-    borderRadius: 20,
     maxWidth: "75%",
+    padding: 10,
+    borderRadius: 12,
   },
 
-  userBubble: {
-    backgroundColor: "#C26FFB",
-    alignSelf: "flex-end",
-    borderBottomRightRadius: 5,
+  bubbleUser: {
+    backgroundColor: "#0084FF",
+    marginLeft: "auto",
   },
 
-  botBubble: {
-    backgroundColor: "#2C2C40",
-    alignSelf: "flex-start",
-    borderBottomLeftRadius: 5,
+  bubbleBot: {
+    backgroundColor: "#F1F0F0",
   },
 
-  msgText: { color: "#fff", fontSize: 16 },
-
-  msgActions: {
-    flexDirection: "row",
-    marginTop: 4,
-    marginLeft: 5,
-  },
-  icon: {
-    color: "#AAA",
-    fontSize: 15,
-    marginRight: 12,
+  bubbleTyping: {
+    backgroundColor: "#DDD",
+    fontStyle: "italic",
   },
 
-  // INPUT
   inputContainer: {
     flexDirection: "row",
+    backgroundColor: "white",
     padding: 10,
-    backgroundColor: "#111122",
-    borderTopWidth: 1,
-    borderTopColor: "#222233",
-  },
-  textInput: {
-    flex: 1,
-    backgroundColor: "#1D1D30",
-    padding: 12,
-    borderRadius: 50,
-    color: "#fff",
-    maxHeight: 110,
-  },
-  sendBtn: {
-    width: 45,
-    height: 45,
-    borderRadius: 30,
-    backgroundColor: "#C26FFB",
-    justifyContent: "center",
     alignItems: "center",
-    marginLeft: 8,
+    borderTopWidth: 1,
+    borderColor: "#CCC",
   },
-  sendIcon: { color: "#fff", fontWeight: "bold", fontSize: 20 },
+
+  input: {
+    flex: 1,
+    backgroundColor: "#F3F3F3",
+    padding: 10,
+    borderRadius: 20,
+    fontSize: 16,
+    marginRight: 10,
+  },
+
+  sendBtn: {
+    backgroundColor: "#0084FF",
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+  },
 });
